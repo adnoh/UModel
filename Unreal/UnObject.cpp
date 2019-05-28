@@ -8,7 +8,6 @@
 
 //#define DEBUG_PROPS				1
 //#define PROFILE_LOADING			1
-//#define DEBUG_TYPES				1
 
 #define DUMP_SHOW_PROP_INDEX	0
 #define DUMP_SHOW_PROP_TYPE		0
@@ -190,6 +189,7 @@ void UObject::EndLoad()
 	#define EDITOR_STR		(Package->ContainsEditorData()) ? " (editor)" : ""
 #else
 	#define UNVERS_STR		""
+	#define EDITOR_STR		""
 #endif
 
 		unguardf("%s'%s.%s', pos=%X, ver=%d/%d%s%s, game=%s", Obj->GetClassName(), Package->Name, Obj->Name, Package->Tell(),
@@ -202,10 +202,12 @@ void UObject::EndLoad()
 		LoadedObjects[i]->PostLoad();
 	unguardf("%s", LoadedObjects[i]->Name);
 	// cleanup
+	guard(Cleanup);
 	GObjLoaded.Empty();
 	GObjBeginLoadCount--;		// decrement after loading
 	appSetNotifyHeader(NULL);
 	assert(GObjBeginLoadCount == 0);
+	unguard;
 
 	// close all opened file handles
 	UnPackage::CloseAllReaders();
@@ -343,6 +345,9 @@ static const struct
 	F(UInt64Property),
 	F(UInt32Property),
 	F(UInt16Property),
+	F(Int64Property),
+	F(Int16Property),
+	F(Int8Property),
 #endif
 #undef F
 };
@@ -403,7 +408,7 @@ struct FPropertyTag
 			Ar << UseObject;
 			if (UseObject)
 			{
-				// This code was bever executed in my tests
+				// This code was never executed in my tests
 				Ar << Object;
 				if (!Object)
 				{
@@ -1082,6 +1087,7 @@ void CTypeInfo::SerializeUnrealProps(FArchive &Ar, void *ObjectData) const
 				appPrintf("WARNING: skipping BoolProperty %s with Tag.Size=%d\n", *Tag.Name, Tag.DataSize);
 				continue;
 			}
+#if UNREAL4
 			if (Tag.Type == NAME_EnumProperty && Tag.DataSize == 8)
 			{
 				// See NAME_EnumProperty serialization in this function: this property has DataSize==8, but
@@ -1089,6 +1095,7 @@ void CTypeInfo::SerializeUnrealProps(FArchive &Ar, void *ObjectData) const
 				appPrintf("WARNING: skipping EnumProperty %s with Tag.Size=%d\n", *Tag.Name, Tag.DataSize);
 				continue;
 			}
+#endif // UNREAL4
 			// skip property data
 			Ar.Seek(StopPos);
 			// serialize other properties

@@ -1,5 +1,5 @@
 // Simple UI library.
-// Copyright (C) 2018 Konstantin Nosov
+// Copyright (C) 2019 Konstantin Nosov
 // Licensed under the BSD license. See LICENSE.txt file in the project root for full license information.
 
 #include "BaseDialog.h"
@@ -81,7 +81,7 @@ void UIGroup::ComputeLayout()
 	);
 	DBG_LAYOUT("{");
 	DebugLayoutDepth++;
-	DBG_LAYOUT("this.Layout: x(%g) y(%g) w(%g) h(%g) - Rect: x(%g) y(%g) w(%g) h(%g)",
+	DBG_LAYOUT("this: Layout(%g %g %g %g), Rect(%g %g %g %g)",
 		RECT_ARG(Layout), RECT_ARG(Rect));
 #endif
 

@@ -29,7 +29,7 @@
 
 #endif // SUPPORT_XBOX360
 
-#if GEARS4
+#if USE_LZ4
 #	include "lz4/lz4.h"
 #endif
 
@@ -297,7 +297,7 @@ int appDecompress(byte *CompressedBuffer, int CompressedSize, byte *Uncompressed
 #endif // SUPPORT_XBOX360
 	}
 
-#if GEARS4
+#if USE_LZ4
 	if (Flags == COMPRESS_LZ4)
 	{
 		int newLen = LZ4_decompress_safe((const char*)CompressedBuffer, (char*)UncompressedBuffer, CompressedSize, UncompressedSize);
@@ -318,6 +318,8 @@ int appDecompress(byte *CompressedBuffer, int CompressedSize, byte *Uncompressed
 /*-----------------------------------------------------------------------------
 	AES support
 -----------------------------------------------------------------------------*/
+
+#if UNREAL4
 
 FString GAesKey;
 
@@ -353,3 +355,5 @@ void appDecryptAES(byte* Data, int Size, const char* Key, int KeyLen)
 
 	unguard;
 }
+
+#endif // UNREAL4

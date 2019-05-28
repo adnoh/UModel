@@ -1,5 +1,5 @@
 // Simple UI library.
-// Copyright (C) 2018 Konstantin Nosov
+// Copyright (C) 2019 Konstantin Nosov
 // Licensed under the BSD license. See LICENSE.txt file in the project root for full license information.
 
 #ifndef __BASE_DIALOG_H__
@@ -175,6 +175,21 @@ protected:
 	{
 		return false;
 	}
+	virtual bool HandleCommand(int id, int cmd, LPARAM lParam, int& result)
+	{
+		// Default implementation: call "legacy" 3-param HandleCommand
+		if (HandleCommand(id, cmd, lParam))
+		{
+			result = 1; // TRUE
+			return true;
+		}
+		else
+		{
+			result = 0; // FALSE
+			return false;
+		}
+		
+	}
 	virtual void DialogClosed(bool cancel)
 	{}
 	virtual void UpdateEnabled();
@@ -185,7 +200,7 @@ protected:
 //	Expose(var)			save pointer to control in variable
 //	SetParent(parent)	attach control to parent
 
-// Some functions exists in UIElement but overrided here to be able to chain them
+// Some functions exists in UIElement but overriden here to be able to chain them
 // without falling back to UIElement class: UIElement's functions can't return
 // 'this' of derived type, so we're redeclaring functions here.
 
@@ -523,6 +538,9 @@ class UICombobox : public UIElement
 		FString Text;
 		int     Value;
 
+		ComboboxItem()
+		{}
+
 		ComboboxItem(const char* text, int value)
 		: Text(text)
 		, Value(value)
@@ -699,7 +717,7 @@ protected:
 	void UpdateListViewHeaderSort();
 
 	virtual void Create(UIBaseDialog* dialog) override;
-	virtual bool HandleCommand(int id, int cmd, LPARAM lParam) override;
+	virtual bool HandleCommand(int id, int cmd, LPARAM lParam, int& result) override;
 };
 
 
@@ -713,9 +731,6 @@ public:
 	UITreeView();
 	virtual ~UITreeView() override;
 
-	//!! TODO:
-	//!! - HideRootItem() -- may be when label is empty?
-
 	FORCEINLINE UITreeView& SetRootLabel(const char* root)
 	{
 		RootLabel = root;
@@ -726,10 +741,12 @@ public:
 	void RemoveAllItems();
 
 	UITreeView& SelectItem(const char* item);
+	const char* GetSelectedItem();
 
 	UITreeView& UseFolderIcons()          { bUseFolderIcons = true; return *this; }
 	UITreeView& UseCheckboxes()           { bUseCheckboxes = true; return *this;  }
 	UITreeView& SetItemHeight(int value)  { ItemHeight = value; return *this;     }
+	UITreeView& HasRootNode(bool value)   { bHasRootNode = value; return *this;   }
 
 	// Checkbox management
 	void SetChecked(const char* item, bool checked = true);
@@ -742,6 +759,7 @@ public:
 protected:
 	TArray<TreeViewItem*> Items;
 	FString		RootLabel;
+	bool		bHasRootNode;
 	TreeViewItem* SelectedItem;
 	int			ItemHeight;
 	bool		bUseFolderIcons;
@@ -756,6 +774,7 @@ protected:
 	virtual bool HandleCommand(int id, int cmd, LPARAM lParam) override;
 	void CreateItem(TreeViewItem& item);
 	TreeViewItem* FindItem(const char* item);
+	TreeViewItem* FindItem(void* hItem);
 	void UpdateCheckedStates();
 	virtual void DialogClosed(bool cancel) override;
 };
@@ -817,7 +836,7 @@ public:
 
 	const char* GetText() const { return *Label; }
 
-	// Replace sumbenu content. 'other' will be destroyed after this function call.
+	// Replace submenu content. 'other' will be destroyed after this function call.
 	void ReplaceWith(UIMenuItem* other);
 
 	// Update checkboxes and radio groups according to attached variables
@@ -873,6 +892,8 @@ protected:
 
 class UIMenu : public UIMenuItem // note: we're not using virtual functions in menu classes now
 {
+	typedef UIMenu ThisClass;
+	DECLARE_CALLBACK(BeforePopup, UIElement*);		// this callback is executed when menu is about to pop up
 public:
 	UIMenu();
 	~UIMenu();
@@ -900,6 +921,8 @@ public:
 	}
 
 	int GetNextItemId();
+
+	void Popup(UIElement* Owner, int x, int y);
 
 protected:
 	int			ReferenceCount;
@@ -1042,7 +1065,7 @@ protected:
 	virtual void UpdateLayout() override;
 	virtual void ComputeLayout();
 
-	virtual bool HandleCommand(int id, int cmd, LPARAM lParam) override;
+	virtual bool HandleCommand(int id, int cmd, LPARAM lParam, int& result) override;
 	virtual void DialogClosed(bool cancel) override;
 	virtual void UpdateEnabled() override;
 	virtual void UpdateVisible() override;
@@ -1087,7 +1110,7 @@ protected:
 	HWND		DlgWnd;
 
 	virtual void Create(UIBaseDialog* dialog) override;
-	virtual bool HandleCommand(int id, int cmd, LPARAM lParam) override;
+	virtual bool HandleCommand(int id, int cmd, LPARAM lParam, int& result) override;
 	virtual void UpdateLayout() override;
 };
 
@@ -1129,7 +1152,7 @@ public:
 	{
 		return ShowDialog(true, title, width, height);
 	}
-	// Show non-modal window. Funciton will return immediately, code should periodically execute
+	// Show non-modal window. Function will return immediately, code should periodically execute
 	// PumpMessages(), otherwise dialog window will not work.
 	FORCEINLINE void ShowDialog(const char* title, int width, int height)
 	{

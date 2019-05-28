@@ -1,5 +1,5 @@
 // Simple UI library.
-// Copyright (C) 2018 Konstantin Nosov
+// Copyright (C) 2019 Konstantin Nosov
 // Licensed under the BSD license. See LICENSE.txt file in the project root for full license information.
 
 #ifndef __UN_CORE_H__
@@ -17,11 +17,11 @@ private:
 public:
 	FORCEINLINE T* GetData()
 	{
-		return items.size() > 0 ? &items[0] : NULL;
+		return items.size() > 0 ? &(*items.begin()) : NULL;
 	}
 	FORCEINLINE const T* GetData() const
 	{
-		return items.size() > 0 ? &items[0] : NULL;
+		return items.size() > 0 ? &(*items.begin()) : NULL;
 	}
 	FORCEINLINE T& operator[](int index)
 	{
@@ -63,9 +63,9 @@ public:
 	{
 		return AddZeroed(Count);
 	}
-	FORCEINLINE void ResizeTo(int count)
+	FORCEINLINE void Reserve(int count)
 	{
-		items.resize(count);
+		items.reserve(count);
 	}
 	void RemoveAt(int index, int count = 1)
 	{
@@ -93,6 +93,12 @@ public:
 			qsort(&items[0], items.size(), sizeof(T), (int (*)(const void*, const void*)) cmpFunc);
 		}
 	}
+
+	// Ranged for support
+	FORCEINLINE friend T*       begin(      TArray& A) { return &(*A.items.begin()); }
+	FORCEINLINE friend const T* begin(const TArray& A) { return &(*A.items.begin()); }
+	FORCEINLINE friend T*       end  (      TArray& A) { return &(*A.items.end());   }
+	FORCEINLINE friend const T* end  (const TArray& A) { return &(*A.items.end());   }
 };
 
 template<typename T>
@@ -208,6 +214,17 @@ public:
 		return A.str != B;
 	}
 };
+
+// Allow use of std::string as FString parameter
+FORCEINLINE FString* CastString(std::string* str)
+{
+	return reinterpret_cast<FString*>(str);
+}
+
+FORCEINLINE FString& CastString(std::string& str)
+{
+	return reinterpret_cast<FString&>(str);
+}
 
 // No TStaticArray FStaticString
 

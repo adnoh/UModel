@@ -1,5 +1,27 @@
 #!/bin/bash
 
+while [ "$1" ]; do
+	case "$1" in
+		--debug)
+			debug=1
+			shift
+			;;
+		--vc)
+			vc_ver=$2
+			shift 2
+			;;
+		--64)
+			PLATFORM="vc-win64"
+			VC32TOOLS_OPTIONS="--64"
+			shift
+			;;
+		*)
+			echo "Usage: build.sh [--debug] [--vc <version>] [--64]"
+			exit
+			;;
+	esac
+done
+
 #-------------------------------------------------------------
 # Get revision number from Git
 
@@ -33,40 +55,54 @@ last_revision=${last_revision##* }		# cut "#define ..."
 
 #-------------------------------------------------------------
 
-PLATFORM="vc-win32"
-#PLATFORM="vc-win64"
-#PLATFORM="mingw32" - not implemented yet
+[ "$PLATFORM" ] || PLATFORM="vc-win32"
 
 # force PLATFORM=linux under Linux OS
 [ "$OSTYPE" == "linux-gnu" ] || [ "$OSTYPE" == "linux" ] && PLATFORM="linux"
 #[ "$PLATFORM" == "linux" ] && PLATFORM="linux64"
 
-# allow platform overriding from command line
-[ "$1" ] && PLATFORM=$1
-
-# setup default compiler version
-[ "$vc_ver" ] || vc_ver=2013
-export vc_ver
-
-GENMAKE_OPTIONS=
-if [ $vc_ver -ge 2015 ]; then
-	GENMAKE_OPTIONS=OLDCRT=0
+if [ "${PLATFORM:0:3}" == "vc-" ]; then
+	# Visual C++ compiler
+	# setup default compiler version
+	[ "$vc_ver" ] || vc_ver=latest
+	# Find Visual Studio
+	. vc32tools $VC32TOOLS_OPTIONS --version=$vc_ver --check
+	[ -z "$found_vc_year" ] && exit 1				# nothing found
+	# Adjust vc_ver to found one
+	vc_ver=$found_vc_year
+#	echo "Found: $found_vc_year $workpath [$vc_ver]"
+	GENMAKE_OPTIONS=VC_VER=$vc_ver					# specify compiler for genmake script
 fi
 
 [ "$project" ] || project="UmodelTool/umodel"		# setup default prohect name
 [ "$root"    ] || root="."
 [ "$render"  ] || render=1
 
-makefile="makefile-$PLATFORM"
-
 # build shader includes before call to genmake
 if [ $render -eq 1 ]; then
+	# 'cd' calls below won't work if we're not calling from the project's root
+	if [ "$root" != "." ]; then
+		echo "Bad 'root'"
+		exit 1
+	fi
 	# build shaders
 	#?? move to makefile
 	cd "Unreal/Shaders"
 	./make.pl
 	cd "../.."
 fi
+
+# prepare makefile parameters, store in obj directory
+projectName=${project##*/}
+makefile="$root/obj/$projectName-$PLATFORM"
+if ! [ -d $root/obj ]; then
+	mkdir $root/obj
+fi
+if [ "$debug" ]; then
+	makefile="${makefile}-debug"
+	GENMAKE_OPTIONS+=" DEBUG=1"
+fi
+makefile="${makefile}.mak"
 
 # update makefile when needed
 # [ $makefile -ot $project ] &&
@@ -75,10 +111,12 @@ $root/Tools/genmake $project.project TARGET=$PLATFORM $GENMAKE_OPTIONS > $makefi
 # build
 case "$PLATFORM" in
 	"vc-win32")
-		vc32tools --make $makefile || exit 1
+		Make $makefile || exit 1
+		cp $root/libs/SDL2/x86/SDL2.dll .
 		;;
 	"vc-win64")
-		vc32tools --64 --make $makefile || exit 1
+		Make $makefile || exit 1
+		cp $root/libs/SDL2/x64/SDL2.dll .
 		;;
 	"mingw32"|"cygwin")
 		PATH=/bin:/usr/bin:$PATH			# configure paths for Cygwin

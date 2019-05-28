@@ -34,11 +34,15 @@ protected:
 	UIButton*		ExportButton;
 	UIMenuItem*		ScanContentMenu;
 	UIMenuItem*		SavePackagesMenu;
+	UIMenu*			TreeMenu;
+	UIMenu*			ListMenu;
 
 	EResult			ModalResult;
 	bool			UseFlatView;
 	bool			DirectorySelected;
 	bool			ContentScanned;
+	// when true, CloseDialog will not reevaluate SelectedPackages
+	bool			DontGetSelectedPackages;
 	FStaticString<64>  PackageFilter;
 	FStaticString<256> SelectedDir;
 
@@ -47,23 +51,26 @@ protected:
 
 	PackageList		Packages;
 
-	void CloseDialog(EResult Result);
+	void CloseDialog(EResult Result, bool bDontGetSelectedPackages = false);
 
+	void OnBeforeListMenuPopup();
 	void OnTreeItemSelected(UITreeView* sender, const char* text);
 	void OnPackageSelected(UIMulticolumnListbox* sender);
 	void OnFlatViewChanged(UICheckbox* sender, bool value);
 	void OnPackageDblClick(UIMulticolumnListbox* sender, int value);
 	void OnColumnClick(UIMulticolumnListbox* sender, int column);
-	void OnOpenClicked();
-	void OnAppendClicked();
-	void OnExportClicked();
-	void OnCancelClicked();
+	void OnOpenFolderClicked();
+	void OnOpenAppendFolderClicked();
+	void OnExportFolderClicked();
 	void OnFilterTextChanged(UITextEdit* sender, const char* text);
 
-	void ScanContent();
+	bool ScanContent(const PackageList& packageList);
 	void SavePackages();
+	void SaveFolderPackages();
+	void CopyPackagePaths();
 
 	void UpdateSelectedPackages();
+	void GetPackagesForSelectedFolder(PackageList& OutPackages);
 	void SelectDirFromFilename(const char* filename);
 	void RefreshPackageListbox();
 	void SortPackages();

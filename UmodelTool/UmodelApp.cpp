@@ -12,6 +12,7 @@
 #include "UnMesh4.h"
 
 #include "UmodelApp.h"
+#include "UmodelCommands.h"
 #include "UmodelSettings.h"
 
 #include "Exporters/Exporters.h"	// for WriteTGA
@@ -101,6 +102,17 @@ bool CUmodelApp::FindObjectAndCreateVisualizer(int dir, bool forceVisualizer, bo
 }
 
 
+void CUmodelApp::ReleaseViewerAndObjects()
+{
+	// destroy a viewer before releasing packages
+	CSkelMeshViewer::UntagAllMeshes();
+	delete Viewer;
+	Viewer = NULL;
+
+	ReleaseAllObjects();
+}
+
+
 #if HAS_UI
 
 bool CUmodelApp::ShowStartupDialog(CStartupSettings& settings)
@@ -130,20 +142,22 @@ bool CUmodelApp::ShowPackageUI()
 {
 	guard(CUmodelApp::ShowPackageUI);
 
-	// When we're doing export, then switching back to GUI, then pressing "Esc",
-	// we can't return to the visualizer which was used before doing export because
-	// all object was unloaded. In this case, code will set 'packagesChanged' flag
-	// to true, causing re-initialization of browser list.
-	bool packagesChanged = false;
 	GuiShown = true;
 
 	while (true)
 	{
 		UIPackageDialog::EResult mode = GPackageDialog.Show();
+
 		if (mode == UIPackageDialog::CANCEL)
 		{
-			if (packagesChanged)
+			if (UObject::GObjObjects.Num() == 0)
+			{
+				// When we're doing export, then switching back to GUI, then pressing "Esc",
+				// we can't return to the visualizer which was used before doing export because
+				// all object was unloaded. In this case, code will set 'packagesChanged' flag
+				// to true, causing re-initialization of browser list.
 				FindObjectAndCreateVisualizer(1, true, true);
+			}
 			return false;
 		}
 
@@ -155,13 +169,14 @@ bool CUmodelApp::ShowPackageUI()
 		TStaticArray<UnPackage*, 256> Packages;
 		for (int i = 0; i < GPackageDialog.SelectedPackages.Num(); i++)
 		{
-			const char* pkgName = GPackageDialog.SelectedPackages[i]->RelativeName;
-			if (!progress.Progress(pkgName, i, GPackageDialog.SelectedPackages.Num()))
+			FStaticString<MAX_PACKAGE_PATH> RelativeName;
+			GPackageDialog.SelectedPackages[i]->GetRelativeName(RelativeName);
+			if (!progress.Progress(*RelativeName, i, GPackageDialog.SelectedPackages.Num()))
 			{
 				cancelled = true;
 				break;
 			}
-			UnPackage* package = UnPackage::LoadPackage(pkgName);	// should always return non-NULL
+			UnPackage* package = UnPackage::LoadPackage(*RelativeName);		// should always return non-NULL
 			if (package) Packages.Add(package);
 		}
 		if (cancelled)
@@ -170,7 +185,12 @@ bool CUmodelApp::ShowPackageUI()
 			continue;
 		}
 
-		if (!Packages.Num()) break;			// should not happen
+		if (!Packages.Num())
+		{
+			// This will happen only if all selected packages has failed to load (wrong package tag etc).
+			// Show the package UI again.
+			continue;
+		}
 
 		// register exporters and classes (will be performed only once); use any package
 		// to detect an engine version
@@ -198,52 +218,13 @@ bool CUmodelApp::ShowPackageUI()
 		if (needReload || mode == UIPackageDialog::EXPORT)
 		{
 			// destroy a viewer before releasing packages
-			CSkelMeshViewer::UntagAllMeshes();
-			delete Viewer;
-			Viewer = NULL;
-
-			packagesChanged = true;
-			ReleaseAllObjects();
+			ReleaseViewerAndObjects();
 		}
 
 		if (mode == UIPackageDialog::EXPORT)
 		{
-#if PROFILE
-//			appResetProfiler(); -- there's nested appResetProfiler/appPrintProfiler calls, which are not supported
-#endif
 			progress.SetDescription("Exporting package");
-			// for each package: load a package, export, then release
-			for (int i = 0; i < Packages.Num(); i++)
-			{
-				UnPackage* package = Packages[i];
-				if (!progress.Progress(package->Name, i, Packages.Num()))
-				{
-					cancelled = true;
-					break;
-				}
-				if (!LoadWholePackage(package, &progress))
-				{
-					cancelled = true;
-					break;
-				}
-				if (!ExportObjects(NULL, &progress))
-				{
-					cancelled = true;
-					break;
-				}
-				ReleaseAllObjects();
-			}
-			// cleanup
-			ResetExportedList();
-#if PROFILE
-//			appPrintProfiler();
-#endif
-			if (cancelled)
-			{
-				ReleaseAllObjects();
-				//!! message box
-				appPrintf("Operation interrupted by user.\n");
-			}
+			ExportPackages(Packages, &progress);
 			progress.CloseDialog();
 			continue;		// after export, show the dialog again
 		}
@@ -275,10 +256,10 @@ bool CUmodelApp::ShowPackageUI()
 
 		progress.CloseDialog();
 
-		if (packagesChanged || !Viewer)
+		// Viewer was released if we're releasing package which is currently used for viewing.
+		if (!Viewer)
 		{
 			FindObjectAndCreateVisualizer(1, true, true);
-			packagesChanged = false;
 		}
 		break;
 	}
@@ -679,10 +660,10 @@ void CUmodelApp::CreateMenu()
 			+ NewMenuHyperLink("Tutorial videos", "https://www.youtube.com/playlist?list=PLJROJrENPVvK-V8PCTR9qBmY0Q7v4wCym")
 			+ NewMenuSeparator()
 			+ NewMenuHyperLink("UModel website", GUmodelHomepage)
-			+ NewMenuHyperLink("UModel FAQ", "http://www.gildor.org/projects/umodel/faq")
-			+ NewMenuHyperLink("Compatibility information", "http://www.gildor.org/projects/umodel/compat")
-			+ NewMenuHyperLink("UModel forums", "http://www.gildor.org/smf/")
-			+ NewMenuHyperLink("Donate", "http://www.gildor.org/en/donate")
+			+ NewMenuHyperLink("UModel FAQ", "https://www.gildor.org/projects/umodel/faq")
+			+ NewMenuHyperLink("Compatibility information", "https://www.gildor.org/projects/umodel/compat")
+			+ NewMenuHyperLink("UModel forums", "https://www.gildor.org/smf/")
+			+ NewMenuHyperLink("Donate", "https://www.gildor.org/en/donate")
 			+ NewMenuSeparator()
 			+ NewMenuItem("About UModel")
 			.SetCallback(BIND_STATIC(&UIAboutDialog::Show))

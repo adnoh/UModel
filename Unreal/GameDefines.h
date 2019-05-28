@@ -2,10 +2,21 @@
 #define __GAME_DEFINES_H__
 
 // Turn on/off different engine versions support
+#ifndef UNREAL1
 #define UNREAL1			1
+#endif
+
+#ifndef UNREAL25
 #define UNREAL25		1
+#endif
+
+#ifndef UNREAL3
 #define UNREAL3			1
+#endif
+
+#ifndef UNREAL4
 #define UNREAL4			1
+#endif
 
 // UE2 (supported by default)
 #define UT2				1
@@ -18,11 +29,14 @@
 #define XIII			1
 
 // requires UNREAL1
+#if UNREAL1
 #define DEUS_EX			1
 #define RUNE			1
 #define UNDYING			1
+#endif
 
 // requires UNREAL25
+#if UNREAL25
 #define TRIBES3			1
 #define SWAT4			1
 #define RAGNAROK2		1
@@ -31,16 +45,20 @@
 #define VANGUARD		1		// Vanguard: Saga of Heroes
 #define LEAD			1		// UbiSoft LEAD Engine (Splinter Cell: Conviction)
 #define EOS				1		// Echo of Soul
+#endif // UNREAL25
 
 // UE2X
 #define UC1				1
 #define UC2				1
 
-// platforms, UE3+
+// platforms
 #define SUPPORT_XBOX360	1		// XBox360 support
 #define SUPPORT_IPHONE	1		// iPhone/iPad support
 #define SUPPORT_ANDROID	1		// Android support
 #define SUPPORT_PS4		1		// Playstation 4 support
+#define SUPPORT_SWITCH	1		// Nintendo Switch support
+
+#if UNREAL3
 
 #define ENDWAR			1		// EndWar
 #define BIOSHOCK		1		//!! requires UNREAL3 and TRIBES3
@@ -123,9 +141,14 @@
 #define STRANGLE		1		// Stranglehold
 #define TNA_IMPACT		1		// TNA iMPACT!
 
+#endif // UNREAL3
+
+
 // UE4
+
+#if UNREAL4
+
 #define GEARS4			1		// Gears of War 4
-#define FRIDAY13		1		// Friday the 13th: The Game
 #define TEKKEN7			1		// Tekken 7
 #define LAWBREAKERS		1		// Lawbreakers
 #define SOD2			1		// State of Decay 2
@@ -133,7 +156,15 @@
 #define PARAGON			1		// Paragon
 #define ARK				1		// Ark: Survival Evolved
 #define HIT				1		// Heroes of Incredible Tales
+#define NGB				1		// New Gundam Breaker
+#define LIS2			1		// Life is Strange 2
 
 #define SPECIAL_TAGS	1		// games with different PACKAGE_FILE_TAG
+
+#endif // UNREAL4
+
+#if GEARS4 || BATMAN
+#define USE_LZ4			1		// LZ4 compression
+#endif
 
 #endif // __GAME_DEFINES_H__

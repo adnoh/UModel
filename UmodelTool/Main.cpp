@@ -30,6 +30,7 @@
 #include "PackageUtils.h"
 
 #include "UmodelApp.h"
+#include "UmodelCommands.h"
 #include "Version.h"
 #include "MiscStrings.h"
 
@@ -319,11 +320,12 @@ void InitClassAndExportSystems(int Game)
 static void PrintUsage()
 {
 	appPrintf(
-			"UE viewer / exporter\n"
+			"Unreal Engine viewer and exporter\n"
 			"Usage: umodel [command] [options] <package> [<object> [<class>]]\n"
 #if HAS_UI
 			"       umodel [command] [options] <directory>\n"
 #endif
+			"       umodel @<response_file>\n"
 			"\n"
 			"    <package>       name of package to load - this could be a file name\n"
 			"                    with or without extension, or wildcard\n"
@@ -339,9 +341,13 @@ static void PrintUsage()
 			"                    will load whole package\n"
 			"    -list           list contents of package\n"
 			"    -export         export specified object or whole package\n"
-			"    -taglist        list of tags to override game autodetection\n"
-			"    -version        display umodel version information\n"
+			"    -save           save specified packages\n"
+			"\n"
+			"Help information:\n"
 			"    -help           display this help page\n"
+			"    -version        display umodel version information\n"
+			"    -taglist        list of tags to override game autodetection (for -game=nnn option)\n"
+			"    -gamelist       list of supported games\n"
 			"\n"
 			"Developer commands:\n"
 			"    -log=file       write log to the specified file\n"
@@ -379,11 +385,14 @@ static void PrintUsage()
 			"    -lzo|lzx|zlib   force compression method for fully-compressed packages\n"
 			"\n"
 			"Platform selection:\n"
-			"    -ps3            set platform to PS3\n"
-			"    -ps4            set platform to PS4\n"
-			"    -ios            set platform to iOS (iPhone/iPad)\n"
-			"    -android        set platform to Android\n"
-			"\n"
+			"    -ps3            Playstation 3\n"
+			"    -ps4            Playstation 4\n"
+			"    -nsw            Nintendo Switch\n"
+			"    -ios            iOS (iPhone/iPad)\n"
+			"    -android        Android\n"
+			"\n");
+
+	appPrintf(
 			"Viewer options:\n"
 			"    -meshes         view meshes only\n"
 			"    -materials      view materials only (excluding textures)\n"
@@ -415,10 +424,8 @@ static void PrintUsage()
 			"    FaceFX          fxa\n"
 			"    Sound           exported \"as is\"\n"
 			"\n"
-			"List of supported games:\n"
+			"For list of supported games please use -gamelist option.\n"
 	);
-
-	PrintGameList();
 
 	appPrintf(
 			"\n"
@@ -433,62 +440,6 @@ static void PrintVersionInfo()
 			"UE Viewer (UModel)\n" "%s\n" "%s\n" "%s\n",
 			GBuildString, GCopyrightString, GUmodelHomepage
 	);
-}
-
-
-/*-----------------------------------------------------------------------------
-	Package helpers
------------------------------------------------------------------------------*/
-
-// Export all loaded objects.
-bool ExportObjects(const TArray<UObject*> *Objects, IProgressCallback* progress)
-{
-	guard(ExportObjects);
-
-	appPrintf("Exporting objects ...\n");
-
-	// export object(s), if possible
-	UnPackage* notifyPackage = NULL;
-	bool hasObjectList = (Objects != NULL) && Objects->Num();
-
-	//?? when 'Objects' passed, probably iterate over that list instead of GObjObjects
-	for (int idx = 0; idx < UObject::GObjObjects.Num(); idx++)
-	{
-		if (progress && !progress->Tick()) return false;
-		UObject* ExpObj = UObject::GObjObjects[idx];
-		bool objectSelected = !hasObjectList || (Objects->FindItem(ExpObj) >= 0);
-
-		if (!objectSelected) continue;
-
-		if (notifyPackage != ExpObj->Package)
-		{
-			notifyPackage = ExpObj->Package;
-			appSetNotifyHeader(notifyPackage->Filename);
-		}
-
-		bool done = ExportObject(ExpObj);
-
-		if (!done && hasObjectList)
-		{
-			// display warning message only when failed to export object, specified from command line
-			appPrintf("ERROR: Export object %s: unsupported type %s\n", ExpObj->Name, ExpObj->GetClassName());
-		}
-	}
-
-	return true;
-
-	unguard;
-}
-
-
-void DisplayPackageStats(const TArray<UnPackage*> &Packages)
-{
-	TArray<ClassStats> stats;
-	CollectPackageStats(Packages, stats);
-
-	appPrintf("Class statistics:\n");
-	for (int i = 0; i < stats.Num(); i++)
-		appPrintf("%5d %s\n", stats[i].Count, stats[i].Name);
 }
 
 
@@ -558,6 +509,14 @@ static void ExceptionHandler()
 // AbortHandler on linux will cause infinite recurse, but works well on Windows
 static void AbortHandler(int signal)
 {
+	if (GErrorHistory[0])
+	{
+		appPrintf("abort called during error handling\n", signal);
+#if VSTUDIO_INTEGRATION
+		__debugbreak();
+#endif
+		exit(1);
+	}
 	appError("abort() called");
 }
 #endif
@@ -704,12 +663,15 @@ static void TestStrings()
 #define OPT_NBOOL(name,var)				{ name, (byte*)&var, false },
 #define OPT_VALUE(name,var,value)		{ name, (byte*)&var, value },
 
-int main(int argc, char **argv)
+int main(int argc, const char **argv)
 {
 	appInitPlatform();
 
 #if PRIVATE_BUILD
 	appPrintf("PRIVATE BUILD\n");
+#endif
+#if MAX_DEBUG
+	appPrintf("DEBUG BUILD\n");
 #endif
 
 #if DO_GUARD
@@ -721,6 +683,14 @@ int main(int argc, char **argv)
 #endif
 
 	guard(Main);
+
+	if (argc == 2 && argv[1][0] == '@')
+	{
+		// Should read command line from a file
+		const char* appName = argv[0];
+		appParseResponseFile(argv[1]+1, argc, argv);
+		argv[0] = appName;
+	}
 
 	// display usage
 #if !HAS_UI
@@ -742,6 +712,7 @@ int main(int argc, char **argv)
 		CMD_PkgInfo,
 		CMD_List,
 		CMD_Export,
+		CMD_Save,
 	};
 
 	static byte mainCmd = CMD_View;
@@ -766,6 +737,7 @@ int main(int argc, char **argv)
 			OPT_VALUE("dump",    mainCmd, CMD_Dump)
 			OPT_VALUE("check",   mainCmd, CMD_Check)
 			OPT_VALUE("export",  mainCmd, CMD_Export)
+			OPT_VALUE("save",    mainCmd, CMD_Save)
 			OPT_VALUE("pkginfo", mainCmd, CMD_PkgInfo)
 			OPT_VALUE("list",    mainCmd, CMD_List)
 #if VSTUDIO_INTEGRATION
@@ -795,6 +767,7 @@ int main(int argc, char **argv)
 			// platform
 			OPT_VALUE("ps3",     GSettings.Startup.Platform, PLATFORM_PS3)
 			OPT_VALUE("ps4",     GSettings.Startup.Platform, PLATFORM_PS4)
+			OPT_VALUE("nsw",     GSettings.Startup.Platform, PLATFORM_SWITCH)
 			OPT_VALUE("ios",     GSettings.Startup.Platform, PLATFORM_IOS)
 			OPT_VALUE("android", GSettings.Startup.Platform, PLATFORM_ANDROID)
 			// compression
@@ -878,13 +851,19 @@ int main(int argc, char **argv)
 		else if (!strnicmp(opt, "aes=", 4))
 		{
 			GAesKey = opt+4;
-			GAesKey.TrimStartAndEnd();
+			GAesKey.TrimStartAndEndInline();
 			CheckHexAesKey();
 		}
 		// information commands
 		else if (!stricmp(opt, "taglist"))
 		{
 			PrintGameList(true);
+			return 0;
+		}
+		else if (!stricmp(opt, "gamelist"))
+		{
+			appPrintf("List of supported games:\n\n");
+			PrintGameList();
 			return 0;
 		}
 		else if (!stricmp(opt, "help"))
@@ -896,6 +875,10 @@ int main(int argc, char **argv)
 		{
 			PrintVersionInfo();
 			return 0;
+		}
+		else if (!stricmp(opt, "debug"))
+		{
+			// Do nothing if this option is not supported
 		}
 		else
 		{
@@ -990,11 +973,13 @@ int main(int argc, char **argv)
 		appSetRootDirectory(".");			// scan for packages
 	}
 
+	bool bShouldLoadPackages = (mainCmd != CMD_Save);
+	TArray<const CGameFileInfo*> GameFiles;
+
 	// Try to load all packages first.
 	// Note: in this code, packages will be loaded without creating any exported objects.
 	for (int i = 0; i < packagesToLoad.Num(); i++)
 	{
-//		UnPackage *Package = UnPackage::LoadPackage(packagesToLoad[i]);
 		TStaticArray<const CGameFileInfo*, 32> Files;
 		appFindGameFiles(packagesToLoad[i], Files);
 
@@ -1006,19 +991,34 @@ int main(int argc, char **argv)
 		{
 			for (int j = 0; j < Files.Num(); j++)
 			{
-				UnPackage* Package = UnPackage::LoadPackage(Files[j]->RelativeName);
-				Packages.Add(Package);
+				bool failed = false;
+				if (bShouldLoadPackages)
+				{
+					UnPackage* Package = UnPackage::LoadPackage(*Files[j]->GetRelativeName());
+					if (Package)
+					{
+						Packages.Add(Package);
+					}
+					else
+					{
+						failed = true;
+					}
+				}
+				if (!failed)
+				{
+					GameFiles.Add(Files[j]);
+				}
 			}
 		}
 	}
 
 #if !HAS_UI
-	if (!Packages.Num())
+	if (!GameFiles.Num())
 	{
 		CommandLineError("failed to load provided packages");
 	}
 #else
-	if (!Packages.Num())
+	if (!GameFiles.Num())
 	{
 		if (mainCmd != CMD_View)
 		{
@@ -1055,6 +1055,12 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	if (mainCmd == CMD_Save)
+	{
+		SavePackages(GameFiles);
+		return 0;
+	}
+
 	// register exporters and classes
 	InitClassAndExportSystems(Packages[0]->Game);
 
@@ -1063,6 +1069,8 @@ int main(int argc, char **argv)
 		DisplayPackageStats(Packages);
 		return 0;					// already displayed when loaded package; extend it?
 	}
+
+	bool bShouldLoadObjects = (mainCmd != CMD_Export) || (objectsToLoad.Num() > 0);
 
 	// load requested objects if any, or fully load everything
 	UObject::BeginLoad();
@@ -1108,7 +1116,7 @@ int main(int argc, char **argv)
 		}
 		appPrintf("Found %d object(s)\n", totalFound);
 	}
-	else
+	else if (bShouldLoadObjects)
 	{
 		// fully load all packages
 		for (int pkg = 0; pkg < Packages.Num(); pkg++)
@@ -1116,7 +1124,7 @@ int main(int argc, char **argv)
 	}
 	UObject::EndLoad();
 
-	if (!UObject::GObjObjects.Num() && !GApplication.GuiShown)
+	if (!UObject::GObjObjects.Num() && !GApplication.GuiShown && bShouldLoadObjects)
 	{
 		appPrintf("\nThe specified package(s) has no supported objects.\n\n");
 	no_objects:
@@ -1135,8 +1143,16 @@ int main(int argc, char **argv)
 
 	if (mainCmd == CMD_Export)
 	{
-		ExportObjects(&Objects); // will export everything if "Objects" array is empty
-		ResetExportedList();
+		// If we have list of objects, the process only those ones. Otherwise, process full packages.
+		if (Objects.Num())
+		{
+	        ExportObjects(&Objects); // will export everything if "Objects" array is empty, however we're calling ExportPackages() in this case
+			ResetExportedList();
+		}
+		else
+		{
+			ExportPackages(Packages);
+		}
 		if (!GApplication.GuiShown)
 			return 0;
 		// switch to a viewer in GUI mode

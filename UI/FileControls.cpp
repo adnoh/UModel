@@ -1,5 +1,5 @@
 // Simple UI library.
-// Copyright (C) 2018 Konstantin Nosov
+// Copyright (C) 2019 Konstantin Nosov
 // Licensed under the BSD license. See LICENSE.txt file in the project root for full license information.
 
 #if _WIN32
@@ -9,7 +9,14 @@
 
 #include <ObjBase.h>		// CoInitialize()
 #include <Shlwapi.h>		// SH* functions
+
+// prevent "warning C4091: 'typedef ': ignored on left of 'tagGPFIDL_FLAGS' when no variable is declared" with Win7.1 SDK
+#pragma warning(push)
+#pragma warning(disable:4091)
+
 #include <Shlobj.h>			// SHBrowseForFolder
+// Restore warnings
+#pragma warning(pop)
 
 #undef PLATFORM_UNKNOWN
 

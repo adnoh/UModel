@@ -1,5 +1,5 @@
 // Simple UI library.
-// Copyright (C) 2018 Konstantin Nosov
+// Copyright (C) 2019 Konstantin Nosov
 // Licensed under the BSD license. See LICENSE.txt file in the project root for full license information.
 
 #if _WIN32
@@ -134,6 +134,15 @@ UIMenuItem& operator+(UIMenuItem& item, UIMenuItem& next)
 
 UIMenuItem& UIMenuItem::Enable(bool enable)
 {
+	if (Type == MI_Submenu)
+	{
+		// Propagate to children
+		for (UIMenuItem* curr = FirstChild; curr; curr = curr->NextChild)
+		{
+			curr->Enable(enable);
+		}
+	}
+
 	Enabled = enable;
 	if (Parent && Parent->hMenu)
 	{
@@ -286,7 +295,7 @@ void UIMenuItem::FillMenuItems(HMENU parentMenu, int& nextId, int& position)
 			break;
 
 		default:
-			appError("Unkwnown item type: %d (label=%s)", item->Type, *item->Label);
+			appError("Unknown item type: %d (label=%s)", item->Type, *item->Label);
 		}
 	}
 
@@ -332,7 +341,7 @@ bool UIMenuItem::HandleCommand(int id)
 				break;
 
 			default:
-				appError("Unkwnown item type: %d (label=%s)", item->Type, *item->Label);
+				appError("Unknown item type: %d (label=%s)", item->Type, *item->Label);
 			}
 			return true;
 		}
@@ -432,7 +441,7 @@ void UIMenuItem::Update()
 			guard(RadioGroup);
 			bool checked = (button->iValue == *(int*)pValue);
 			CheckMenuItem(hMenu, button->Id, MF_BYCOMMAND | (checked ? MF_CHECKED : 0));
-			unguard("\"%s\"", *button->Label);
+			unguardf("\"%s\"", *button->Label);
 		}
 		break;
 	case MI_Submenu:
@@ -600,6 +609,32 @@ void UIMenu::Create(bool popup)
 int UIMenu::GetNextItemId()
 {
 	return max(GetMaxItemIdRecursive() + 1, FIRST_MENU_ID);
+}
+
+void UIMenu::Popup(UIElement* Owner, int x, int y)
+{
+	guard(UIMenu::Popup);
+
+	if (BeforePopup)
+	{
+		BeforePopup(this, Owner);
+	}
+
+	// Create menu
+	GetHandle(true, true);
+
+	TPMPARAMS tpmParams;
+	memset(&tpmParams, 0, sizeof(TPMPARAMS));
+	tpmParams.cbSize = sizeof(TPMPARAMS);
+//??	tpmParams.rcExclude = rectButton; - this will let some control to not be covered by menu (used for UIMenuButton before)
+
+	int cmd = TrackPopupMenuEx(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON | TPM_RETURNCMD, x, y, Owner ? Owner->GetWnd() : NULL, &tpmParams);
+	if (cmd)
+	{
+		HandleCommand(cmd);
+	}
+
+	unguard;
 }
 
 #endif // HAS_UI

@@ -11,6 +11,8 @@
 #include "TypeConvert.h"
 
 //#define DEBUG_DECOMPRESS	1
+//#define DEBUG_SKELMESH	1
+//#define DEBUG_ANIM		1
 
 // References in UE4 code: Engine/Public/AnimationCompression.h
 // - FAnimationCompression_PerTrackUtils
@@ -25,6 +27,71 @@
 USkeleton::~USkeleton()
 {
 	if (ConvertedAnim) delete ConvertedAnim;
+}
+
+static CVec3 GetBoneScale(FReferenceSkeleton& Skel, int BoneIndex)
+{
+	CVec3 Scale;
+	Scale.Set(1, 1, 1);
+
+	while (BoneIndex >= 0)
+	{
+		FVector BoneScale = Skel.RefBonePose[BoneIndex].Scale3D;
+		Scale.Scale(CVT(BoneScale));
+		BoneIndex = Skel.RefBoneInfo[BoneIndex].ParentIndex;
+	}
+
+	return Scale;
+}
+
+FArchive& operator<<(FArchive& Ar, FReferenceSkeleton& S)
+{
+	guard(FReferenceSkeleton<<);
+
+	Ar << S.RefBoneInfo;
+	Ar << S.RefBonePose;
+
+	if (Ar.ArVer >= VER_UE4_REFERENCE_SKELETON_REFACTOR)
+		Ar << S.NameToIndexMap;
+
+	int NumBones = S.RefBoneInfo.Num();
+	if (Ar.ArVer < VER_UE4_FIXUP_ROOTBONE_PARENT && NumBones > 0 && S.RefBoneInfo[0].ParentIndex != INDEX_NONE)
+		S.RefBoneInfo[0].ParentIndex = INDEX_NONE;
+
+#if DEBUG_SKELMESH
+	assert(S.RefBonePose.Num() == NumBones);
+	assert(S.NameToIndexMap.Num() == NumBones);
+
+	for (int i = 0; i < NumBones; i++)
+	{
+		appPrintf("bone[%d] \"%s\" parent=%d",
+			i, *S.RefBoneInfo[i].Name, S.RefBoneInfo[i].ParentIndex);
+		FVector Scale = S.RefBonePose[i].Scale3D;
+		CVec3 ScaleDelta;
+		ScaleDelta.Set(Scale.X - 1, Scale.Y - 1, Scale.Z - 1);
+		if (ScaleDelta.GetLengthSq() > 0.001f)
+		{
+			appPrintf(" scale={%g %g %g}", FVECTOR_ARG(Scale));
+		}
+		appPrintf("\n");
+	}
+#endif // DEBUG_SKELMESH
+
+	// Adjust skeleton's scale, if any. Use scale of the root bone.
+	if (NumBones > 0)
+	{
+		// Adjust other bones
+		for (int BoneIndex = 0; BoneIndex < NumBones; BoneIndex++)
+		{
+			FTransform& Transform = S.RefBonePose[BoneIndex];
+			CVec3 Scale = GetBoneScale(S, BoneIndex);
+			CVT(Transform.Translation).Scale(Scale);
+		}
+	}
+
+	return Ar;
+
+	unguard;
 }
 
 FArchive& operator<<(FArchive& Ar, FReferencePose& P)
@@ -57,6 +124,27 @@ FArchive& operator<<(FArchive& Ar, FReferencePose& P)
 
 	unguard;
 }
+
+struct FSmartName
+{
+	FName DisplayName;
+
+	friend FArchive& operator<<(FArchive& Ar, FSmartName& N)
+	{
+		Ar << N.DisplayName;
+		if (FAnimPhysObjectVersion::Get(Ar) < FAnimPhysObjectVersion::RemoveUIDFromSmartNameSerialize)
+		{
+			uint16 UID;
+			Ar << UID;
+		}
+		if (FAnimPhysObjectVersion::Get(Ar) < FAnimPhysObjectVersion::SmartNameRefactorForDeterministicCooking)
+		{
+			FGuid Guid;
+			Ar << Guid;
+		}
+		return Ar;
+	}
+};
 
 FArchive& operator<<(FArchive& Ar, FSmartNameMapping& N)
 {
@@ -128,6 +216,15 @@ void USkeleton::Serialize(FArchive &Ar)
 		return;
 	}
 
+#if DEBUG_SKELMESH
+	appPrintf("Skeleton BoneTree:\n");
+	for (int i = 0; i < BoneTree.Num(); i++)
+	{
+		const FBoneNode& Bone = BoneTree[i];
+		appPrintf("[%d] \"%s\" = %s\n", i, *ReferenceSkeleton.RefBoneInfo[i].Name, EnumToName(Bone.TranslationRetargetingMode));
+	}
+#endif // DEBUG_SKELMESH
+
 	if (Ar.ArVer >= VER_UE4_SKELETON_GUID_SERIALIZATION)
 		Ar << Guid;
 
@@ -135,6 +232,16 @@ void USkeleton::Serialize(FArchive &Ar)
 	if (Ar.ArVer >= VER_UE4_SKELETON_ADD_SMARTNAMES)
 		Ar << SmartNames;
 	unguard;
+
+	if (FAnimObjectVersion::Get(Ar) >= FAnimObjectVersion::StoreMarkerNamesOnSkeleton)
+	{
+		FStripDataFlags StripFlags(Ar);
+		if (!StripFlags.IsEditorDataStripped())
+		{
+			TArray<FName> ExistingMarkerNames;
+			Ar << ExistingMarkerNames;
+		}
+	}
 
 	unguard;
 }
@@ -268,6 +375,27 @@ static void FixRotationKeys(CAnimSequence* Anim)
 			Track->KeyQuat[KeyIndex].Conjugate();
 		}
 	}
+}
+
+// Use skeleton's bone settings to adjust animation sequences
+void AdjustSequenceBySkeleton(USkeleton* Skel, CAnimSequence* Anim)
+{
+	guard(AdjustSequenceBySkeleton);
+
+	if (Skel->ReferenceSkeleton.RefBoneInfo.Num() == 0) return;
+
+	for (int TrackIndex = 0; TrackIndex < Anim->Tracks.Num(); TrackIndex++)
+	{
+		CAnimTrack* Track = Anim->Tracks[TrackIndex];
+		CVec3 BoneScale = GetBoneScale(Skel->ReferenceSkeleton, TrackIndex);
+		for (int KeyIndex = 0; KeyIndex < Track->KeyPos.Num(); KeyIndex++)
+		{
+			// Scale translation by accumulated bone scale value
+			Track->KeyPos[KeyIndex].Scale(BoneScale);
+		}
+	}
+
+	unguard;
 }
 
 void USkeleton::ConvertAnims(UAnimSequence4* Seq)
@@ -476,7 +604,7 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 				{
 					switch (KeyFormat)
 					{
-//					case ACF_None:
+					case ACF_None:
 					case ACF_Float96NoW:
 						{
 							FVector v;
@@ -559,7 +687,7 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 				{
 					switch (KeyFormat)
 					{
-//					TR (ACF_None, FQuat)
+					case ACF_None:
 					case ACF_Float96NoW:
 						{
 							FQuatFloat96NoW q;
@@ -708,6 +836,7 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 
 	// Now should invert all imported rotations
 	FixRotationKeys(Dst);
+	AdjustSequenceBySkeleton(this, Dst);
 
 	unguardf("Skel=%s Anim=%s", Name, Seq->Name);
 }
@@ -717,7 +846,8 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 	UAnimSequence
 -----------------------------------------------------------------------------*/
 
-// PostSerialize() adds some serialization logic to data which were serialized as properties
+// PostSerialize() adds some serialization logic to data which were serialized as properties. These functions
+// were called in UE4.12 and earlier as "Serialize" and in 4.13 renamed to "PostSerialize".
 
 void FAnimCurveBase::PostSerialize(FArchive& Ar)
 {
@@ -738,6 +868,19 @@ void FRawCurveTracks::PostSerialize(FArchive& Ar)
 		FloatCurves[i].PostSerialize(Ar);
 	}
 	//!! non-cooked assets also may have TransformCurves
+}
+
+ FArchive& operator<<(FArchive& Ar, FRawCurveTracks& T)
+{
+	guard(FRawCurveTracks<<);
+	// This structure is always serialized as property list
+	FRawCurveTracks::StaticGetTypeinfo()->SerializeUnrealProps(Ar, &T);
+	if (Ar.Game < GAME_UE4(13))
+	{
+		T.PostSerialize(Ar);
+	}
+	return Ar;
+	unguard;
 }
 
 void UAnimSequenceBase::Serialize(FArchive& Ar)
@@ -779,40 +922,73 @@ void UAnimSequence4::Serialize(FArchive& Ar)
 
 		if (bSerializeCompressedData)
 		{
+			// UAnimSequence::SerializeCompressedData()
 			// these fields were serialized as properties in pre-UE4.12 engine version
 			Ar << (byte&)KeyEncodingFormat;
 			Ar << (byte&)TranslationCompressionFormat;
 			Ar << (byte&)RotationCompressionFormat;
 			Ar << (byte&)ScaleCompressionFormat;
+		#if DEBUG_ANIM
+			appPrintf("Key: %d Trans: %d Rot: %d Scale: %d\n", KeyEncodingFormat, TranslationCompressionFormat,
+				RotationCompressionFormat, ScaleCompressionFormat);
+		#endif
 
 			Ar << CompressedTrackOffsets;
 			Ar << CompressedScaleOffsets;
+		#if DEBUG_ANIM
+			appPrintf("TrackOffsets: %d ScaleOffsets: %d\n", CompressedTrackOffsets.Num(), CompressedScaleOffsets.OffsetData.Num());
+		#endif
 
-/*??		if (Ar.Game >= GAME_UE4(21)) -- not in Fortnite yet
+			if (Ar.Game >= GAME_UE4(21))
 			{
-///DUMP_ARC_BYTES(Ar, 64, "CompressedStream-Segments");
 				// UE4.21+ - added compressed segments
 				Ar << CompressedSegments;
-			} */
+				if (CompressedSegments.Num())
+				{
+					//?? TODO: CompressedSegments
+					appNotify("animation has CompressedSegments!");
+				}
+			}
 
 			Ar << CompressedTrackToSkeletonMapTable;
-			Ar << CompressedCurveData;
 
+			if (Ar.Game < GAME_UE4(22))
+			{
+				Ar << CompressedCurveData;
+			}
+			else
+			{
+				TArray<FSmartName> CompressedCurveNames;
+				Ar << CompressedCurveNames;
+			}
+
+#if LIS2
+			if (Ar.Game == GAME_LIS2) goto no_raw_data_size; // this is basically UE4.17, but with older animation format
+#endif
 			if (Ar.Game >= GAME_UE4(17))
 			{
 				// UE4.17+
 				int32 CompressedRawDataSize;
 				Ar << CompressedRawDataSize;
 			}
-
-			//!! temporary code: it's not in UE4 code base, however some extra integer exists in recent Fortnite at this place
-			if (Ar.Game >= GAME_UE4(21))
+		no_raw_data_size:
+			if (Ar.Game >= GAME_UE4(22))
 			{
-				Ar.Seek(Ar.Tell()+4);
+				int32 CompressedNumFrames;
+				Ar << CompressedNumFrames;
 			}
 
 			// compressed data
 			Ar << CompressedByteStream;
+
+			if (Ar.Game >= GAME_UE4(22))
+			{
+				FString CurveCodecPath;
+				TArray<byte> CompressedCurveByteStream;
+				Ar << CurveCodecPath << CompressedCurveByteStream;
+			}
+
+			// End of UAnimSequence::SerializeCompressedData()
 
 			// after compressed data ...
 			Ar << bUseRawDataOnly;
@@ -834,6 +1010,8 @@ void UAnimSequence4::Serialize(FArchive& Ar)
 // CompressedByteStream before translation and rotation. In other words, data reordered, but
 // offsets pointed to original data. Here we're reordering data back, duplicating functionality
 // of AEFPerTrackCompressionCodec::ByteSwapOut().
+// The bug was reported to Epic at UDN: https://udn.unrealengine.com/questions/488635/view.html
+// and it seems it was already fixed for UE4.23.
 void UAnimSequence4::TransferPerTrackData(TArray<uint8>& Dst, const TArray<uint8>& Src)
 {
 	guard(UAnimSequence4::TransferPerTrackData);
@@ -951,7 +1129,7 @@ void UAnimSequence4::PostLoad()
 	if (!Skeleton) return;		// missing package etc
 	Skeleton->ConvertAnims(this);
 
-	// Release original animaiton data to save memory
+	// Release original animation data to save memory
 	RawAnimationData.Empty();
 	CompressedByteStream.Empty();
 	CompressedTrackOffsets.Empty();

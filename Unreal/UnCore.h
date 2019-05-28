@@ -9,6 +9,11 @@
 #undef PLATFORM_UNKNOWN		// defined in windows headers
 
 
+#ifndef USE_COMPACT_PACKAGE_STRUCTS
+#define USE_COMPACT_PACKAGE_STRUCTS		1		// define if you want to drop/skip data which are not used in framework
+#endif
+
+
 // forward declarations
 template<typename T> class TArray;
 class FArchive;
@@ -62,7 +67,7 @@ extern int GNumSerialize;
 extern int GSerializeBytes;
 
 void appResetProfiler();
-void appPrintProfiler();
+void appPrintProfiler(const char* label = NULL);
 
 #define PROFILE_POINT(Label)	appPrintProfiler(); appPrintf("PROFILE: " #Label "\n");
 
@@ -90,25 +95,61 @@ void appSetRootDirectory(const char *dir, bool recurse = true);
 void appSetRootDirectory2(const char *filename);
 const char *appGetRootDirectory();
 
+// forwards
+class FString;
+class FVirtualFileSystem;
+
 struct CGameFileInfo
 {
+	friend void appRegisterGameFile(const char *FullName, FVirtualFileSystem* parentVfs);
+	friend const CGameFileInfo* appFindGameFile(const char *Filename, const char *Ext);
+
+	CGameFileInfo* HashNext;						// used for fast search; computed from ShortFilename excluding extension
+
+protected:
 	const char*	RelativeName;						// relative to RootDirectory
 	const char*	ShortFilename;						// without path, points to filename part of RelativeName
 	const char*	Extension;							// points to extension part (excluding '.') of RelativeName
-	CGameFileInfo* HashNext;						// used for fast search; computed from ShortFilename excluding extension
-	bool		IsPackage;
+
+public:
+	FVirtualFileSystem* FileSystem;					// owning virtual file system (NULL for OS file system)
+	UnPackage*	Package;							// non-null when corresponding package is loaded
+
 	int64		Size;								// file size, in bytes
 	int32		SizeInKb;							// file size, in kilobytes
-	int			ExtraSizeInKb;						// size of additional non-package files
-	class FVirtualFileSystem* FileSystem;			// owning virtual file system (NULL for OS file system)
-	UnPackage*	Package;							// non-null when corresponding package is loaded
+	int32		ExtraSizeInKb;						// size of additional non-package files (ubulk, uexp etc)
+	bool		IsPackage;
+
 	// content information, valid when PackageScanned is true
 	bool		PackageScanned;
-	int			NumSkeletalMeshes;
-	int			NumStaticMeshes;
-	int			NumAnimations;
-	int			NumTextures;
+	uint16		NumSkeletalMeshes;
+	uint16		NumStaticMeshes;
+	uint16		NumAnimations;
+	uint16		NumTextures;
 
+	FArchive* CreateReader() const;
+
+	const char* GetExtension() const
+	{
+		return Extension;
+	}
+
+	// Get full name of the file
+	void GetRelativeName(FString& OutName) const;
+	FString GetRelativeName() const;
+	// Get file path and name without extension
+	void GetRelativeNameNoExt(FString& OutName) const;
+	// Get file name with extension with no path
+	void GetCleanName(FString& OutName) const;
+	// Get path part of the name
+	void GetPath(FString& OutName) const;
+
+	static int CompareNames(const CGameFileInfo& A, const CGameFileInfo& B)
+	{
+		return stricmp(A.RelativeName, B.RelativeName);
+	}
+
+	//?? todo: find why it is ever used, change name?
 	void UpdateFrom(const CGameFileInfo* other)
 	{
 		// Copy information from 'other' entry, but preserve hash chains
@@ -130,7 +171,6 @@ const CGameFileInfo *appFindGameFile(const char *Filename, const char *Ext = NUL
 void appFindGameFiles(const char *Filename, TArray<const CGameFileInfo*>& Files);
 
 const char *appSkipRootDir(const char *Filename);
-FArchive *appCreateFileReader(const CGameFileInfo *info);
 
 typedef bool (*EnumGameFilesCallback_t)(const CGameFileInfo*, void*);
 void appEnumGameFilesWorker(EnumGameFilesCallback_t, const char *Ext = NULL, void *Param = NULL);
@@ -166,37 +206,35 @@ const char* appStrdupPool(const char* str);
 class FName
 {
 public:
-	int			Index;
-#if UNREAL3 || UNREAL4
-	int			ExtraIndex;
-#endif
 	const char	*Str;
+#if !USE_COMPACT_PACKAGE_STRUCTS
+	int32		Index;
+	#if UNREAL3 || UNREAL4
+	int32		ExtraIndex;
+	#endif
+#endif // USE_COMPACT_PACKAGE_STRUCTS
 
 	FName()
-	:	Index(0)
-	,	Str("None")
-#if UNREAL3 || UNREAL4
+	:	Str("None")
+#if !USE_COMPACT_PACKAGE_STRUCTS
+	,	Index(0)
+	#if UNREAL3 || UNREAL4
 	,	ExtraIndex(0)
-#endif
+	#endif
+#endif // USE_COMPACT_PACKAGE_STRUCTS
 	{}
 
-	inline FName& operator=(const FName &Other)
-	{
-		Index = Other.Index;
-#if UNREAL3 || UNREAL4
-		ExtraIndex = Other.ExtraIndex;
-#endif // UNREAL3
-		Str = Other.Str;
-		return *this;
-	}
+	inline FName& operator=(const FName &Other) = default;
 
 	inline FName& operator=(const char* String)
 	{
 		Str = appStrdupPool(String);
+#if !USE_COMPACT_PACKAGE_STRUCTS
 		Index = 0;
-#if UNREAL3 || UNREAL4
+	#if UNREAL3 || UNREAL4
 		ExtraIndex = 0;
-#endif
+	#endif
+#endif // USE_COMPACT_PACKAGE_STRUCTS
 		return *this;
 	}
 
@@ -385,16 +423,20 @@ enum EGame
 		GAME_Lawbreakers = GAME_UE4(13)+1,
 		GAME_StateOfDecay2 = GAME_UE4(13)+2,
 		// 4.14
-		GAME_Friday13 = GAME_UE4(14)+1,
 		GAME_Tekken7 = GAME_UE4(14)+2,
+		// 4.16
+		GAME_NGB = GAME_UE4(16)+1,
+		// 4.17
+		GAME_LIS2 = GAME_UE4(17)+1,
 		// 4.19
 		GAME_Paragon = GAME_UE4(19)+1,
-		GAME_Dauntless = GAME_UE4(19)+2,
+		// 4.20
+		GAME_Dauntless = GAME_UE4(20)+2,
 
 	GAME_ENGINE    = 0xFFF0000	// mask for game engine
 };
 
-#define LATEST_SUPPORTED_UE4_VERSION		21		// UE4.XX
+#define LATEST_SUPPORTED_UE4_VERSION		23		// UE4.XX
 
 enum EPlatform
 {
@@ -403,6 +445,7 @@ enum EPlatform
 	PLATFORM_XBOX360,
 	PLATFORM_PS3,
 	PLATFORM_PS4,
+	PLATFORM_SWITCH,
 	PLATFORM_IOS,
 	PLATFORM_ANDROID,
 
@@ -455,7 +498,7 @@ public:
 		Platform      = Other.Platform;
 	}
 
-	// Information aboit game and engine this archive belongs to.
+	// Information about game and engine this archive belongs to.
 
 	void DetectGame();
 	void OverrideVersion();
@@ -897,6 +940,7 @@ protected:
 // research helper
 inline void DUMP_ARC_BYTES(FArchive &Ar, int NumBytes, const char* Label = NULL)
 {
+	guard(DUMP_ARC_BYTES);
 	if (Label) appPrintf("%s:", Label);
 	int64 OldPos = Ar.Tell64();
 	for (int i = 0; i < NumBytes; i++)
@@ -910,6 +954,7 @@ inline void DUMP_ARC_BYTES(FArchive &Ar, int NumBytes, const char* Label = NULL)
 	}
 	appPrintf("\n");
 	Ar.Seek64(OldPos);
+	unguard;
 }
 
 inline void DUMP_MEM_BYTES(const void* Data, int NumBytes)
@@ -1680,18 +1725,10 @@ public:
 		FArray::Empty(count, sizeof(T));
 	}
 
-	FORCEINLINE void ResizeTo(int count)
+	FORCEINLINE void Reserve(int count)
 	{
-		if (count > DataCount)
-		{
-			// grow array
-			FArray::GrowArray(count - DataCount, sizeof(T));
-		}
-		else if (count < DataCount)
-		{
-			// shrink array
-			RemoveAt(count, DataCount - count);
-		}
+		if (count > MaxCount)
+			ResizeTo(count);
 	}
 
 	// set new DataCount without reallocation if possible
@@ -1717,6 +1754,12 @@ public:
 	{
 		QSort<T>((T*)DataPtr, DataCount, cmpFunc);
 	}
+
+	// Ranged for support
+	FORCEINLINE friend T*       begin(      TArray& A) { return (T*) A.DataPtr; }
+	FORCEINLINE friend const T* begin(const TArray& A) { return (const T*) A.DataPtr; }
+	FORCEINLINE friend T*       end  (      TArray& A) { return (T*) A.DataPtr + A.DataCount; }
+	FORCEINLINE friend const T* end  (const TArray& A) { return (const T*) A.DataPtr + A.DataCount; }
 
 	// serializer
 	friend FORCEINLINE FArchive& operator<<(FArchive &Ar, TArray &A)
@@ -1810,6 +1853,20 @@ protected:
 		Empty();
 		MoveData(Other);
 		return *this;
+	}
+
+	FORCEINLINE void ResizeTo(int count)
+	{
+		if (count > DataCount)
+		{
+			// grow array
+			FArray::GrowArray(count - DataCount, sizeof(T));
+		}
+		else if (count < DataCount)
+		{
+			// shrink array
+			RemoveAt(count, DataCount - count);
+		}
 	}
 
 	// Helper function to reduce TLazyArray etc operator<<'s code size.
@@ -2249,7 +2306,7 @@ void appReadCompressedChunk(FArchive &Ar, byte *Buffer, int Size, int Compressio
 -----------------------------------------------------------------------------*/
 
 // UE3
-#define BULKDATA_StoreInSeparateFile	0x01		// bulk stored in different file
+#define BULKDATA_StoreInSeparateFile	0x01		// bulk stored in different file (otherwise it's "inline")
 #define BULKDATA_CompressedZlib			0x02		// name = BULKDATA_SerializeCompressedZLIB (UE4) ?
 #define BULKDATA_CompressedLzo			0x10		// unknown name
 #define BULKDATA_Unused					0x20		// empty bulk block
@@ -2288,9 +2345,16 @@ struct FByteBulkData //?? separate FUntypedBulkData
 //	int		LockStatus;
 //	FArchive *AttachedAr;
 
+#if UNREAL4
+	bool	bIsUE4Data;					// indicates how to treat BulkDataFlags, as these constants aren't compatible between UE3 and UE4
+#endif
+
 	FByteBulkData()
 	:	BulkData(NULL)
 	,	BulkDataOffsetInFile(0)
+#if UNREAL4
+	,	bIsUE4Data(false)
+#endif
 	{}
 
 	virtual ~FByteBulkData()
@@ -2307,6 +2371,17 @@ struct FByteBulkData //?? separate FUntypedBulkData
 	{
 		if (BulkData) appFree(BulkData);
 		BulkData = NULL;
+	}
+
+	bool CanReloadBulk() const
+	{
+#if UNREAL4
+		if (bIsUE4Data)
+		{
+			return (BulkDataFlags & (BULKDATA_OptionalPayload|BULKDATA_PayloadInSeperateFile)) != 0;
+		}
+#endif // UNREAL4
+		return (BulkDataFlags & BULKDATA_StoreInSeparateFile) != 0;
 	}
 
 	// support functions
@@ -2353,7 +2428,7 @@ struct FIntBulkData : public FByteBulkData
 #define COMPRESS_LZO_ENC_SMITE	514					// encrypted LZO
 #endif
 
-#if GEARS4
+#if USE_LZ4
 #define COMPRESS_LZ4		0xFE					// custom umodel's constant
 #endif
 
@@ -2469,7 +2544,9 @@ enum
 		VER_UE4_ADDED_PACKAGE_SUMMARY_LOCALIZATION_ID = 516,
 	VER_UE4_19 = 516,
 	VER_UE4_20 = 516,
-	VER_UE4_21 = 516,
+	VER_UE4_21 = 517,
+	VER_UE4_22 = 517,
+	VER_UE4_23 = 517, //??
 	// look for NEW_ENGINE_VERSION over the code to find places where version constants should be inserted.
 	// LATEST_SUPPORTED_UE4_VERSION should be updated too.
 };
@@ -2495,7 +2572,8 @@ struct FFrameworkObjectVersion
 		// UE4.17 = 28
 		// UE4.18 = 30
 		// UE4.19 = 33
-		// UE4.20 = 34
+		// UE4.20, UE4.21 = 34
+		// UE4.20 = 35
 
 		VersionPlusOne,
 		LatestVersion = VersionPlusOne - 1
@@ -2508,8 +2586,8 @@ struct FFrameworkObjectVersion
 		if (ver >= 0)
 			return (Type)ver;
 
-#if FRIDAY13 || TEKKEN7
-		if (Ar.Game == GAME_Friday13 || Ar.Game == GAME_Tekken7) return (Type)14;		// pre-UE4.14
+#if TEKKEN7
+		if (Ar.Game == GAME_Tekken7) return (Type)14;		// pre-UE4.14
 #endif
 
 		if (Ar.Game < GAME_UE4(12))
@@ -2530,8 +2608,10 @@ struct FFrameworkObjectVersion
 			return (Type)30;
 		if (Ar.Game < GAME_UE4(20))
 			return (Type)33;
-		if (Ar.Game < GAME_UE4(21))
+		if (Ar.Game < GAME_UE4(22))
 			return (Type)34;
+		if (Ar.Game < GAME_UE4(23))
+			return (Type)35;
 		// NEW_ENGINE_VERSION
 		return LatestVersion;
 	}
@@ -2552,6 +2632,9 @@ struct FEditorObjectVersion
 		// UE4.17, UE4.18 = 20
 		// UE4.19 = 23
 		// UE4.20 = 24
+		// UE4.21 = 26
+		// UE4.22 = 30
+		StaticMeshDeprecatedRawMesh = 28,	//todo
 
 		VersionPlusOne,
 		LatestVersion = VersionPlusOne - 1
@@ -2564,8 +2647,8 @@ struct FEditorObjectVersion
 		if (ver >= 0)
 			return (Type)ver;
 
-#if FRIDAY13 || TEKKEN7
-		if (Ar.Game == GAME_Friday13 || Ar.Game == GAME_Tekken7) return (Type)7;		// pre-UE4.14
+#if TEKKEN7
+		if (Ar.Game == GAME_Tekken7) return (Type)7;		// pre-UE4.14
 #endif
 
 		if (Ar.Game < GAME_UE4(12))
@@ -2586,6 +2669,10 @@ struct FEditorObjectVersion
 			return (Type)23;
 		if (Ar.Game < GAME_UE4(21))
 			return (Type)24;
+		if (Ar.Game < GAME_UE4(22))
+			return (Type)26;
+		if (Ar.Game < GAME_UE4(23))
+			return (Type)30;
 		// NEW_ENGINE_VERSION
 		return LatestVersion;
 	}
@@ -2615,7 +2702,7 @@ struct FSkeletalMeshCustomVersion
 		RemoveTriangleSorting = 13,
 		RemoveDuplicatedClothingSections = 14,
 		DeprecateSectionDisabledFlag = 15,
-		// UE4.20 = 16
+		// UE4.20-UE4.22 = 16
 		SectionIgnoreByReduceAdded = 16,
 
 		VersionPlusOne,
@@ -2646,8 +2733,42 @@ struct FSkeletalMeshCustomVersion
 			return CompactClothVertexBuffer;
 		if (Ar.Game < GAME_UE4(20))
 			return DeprecateSectionDisabledFlag;
-		if (Ar.Game < GAME_UE4(21))
+		if (Ar.Game < GAME_UE4(23))
 			return SectionIgnoreByReduceAdded;
+		// NEW_ENGINE_VERSION
+		return LatestVersion;
+	}
+};
+
+struct FCoreObjectVersion
+{
+	enum Type
+	{
+		BeforeCustomVersionWasAdded = 0,
+
+		// UE4.12-UE4.14 = 1
+		// UE4.15-UE4.21 = 2
+		// UE4.22 = 3
+		SkeletalMaterialEditorDataStripping = 3,
+
+		VersionPlusOne,
+		LatestVersion = VersionPlusOne - 1
+	};
+
+	static Type Get(const FArchive& Ar)
+	{
+		static const FGuid GUID = { 0x375EC13C, 0x06E448FB, 0xB50084F0, 0x262A717E };
+		int ver = GetUE4CustomVersion(Ar, GUID);
+		if (ver >= 0)
+			return (Type)ver;
+		if (Ar.Game < GAME_UE4(12))
+			return BeforeCustomVersionWasAdded;
+		if (Ar.Game < GAME_UE4(15))
+			return (Type)1;
+		if (Ar.Game < GAME_UE4(22))
+			return (Type)2;
+		if (Ar.Game < GAME_UE4(23))
+			return SkeletalMaterialEditorDataStripping;
 		// NEW_ENGINE_VERSION
 		return LatestVersion;
 	}
@@ -2667,6 +2788,8 @@ struct FRenderingObjectVersion
 		// UE4.19 = 25
 		// UE4.20 = 26
 		IncreaseNormalPrecision = 26,
+		// UE4.21 = 27
+		// UE4.22 = 28
 
 		VersionPlusOne,
 		LatestVersion = VersionPlusOne - 1
@@ -2679,8 +2802,8 @@ struct FRenderingObjectVersion
 		if (ver >= 0)
 			return (Type)ver;
 
-#if FRIDAY13 || TEKKEN7
-		if (Ar.Game == GAME_Friday13 || Ar.Game == GAME_Tekken7) return (Type)9;		// pre-UE4.14
+#if TEKKEN7
+		if (Ar.Game == GAME_Tekken7) return (Type)9;		// pre-UE4.14
 #endif
 
 		if (Ar.Game < GAME_UE4(12))
@@ -2701,6 +2824,36 @@ struct FRenderingObjectVersion
 			return (Type)25;
 		if (Ar.Game < GAME_UE4(21))
 			return IncreaseNormalPrecision;
+		if (Ar.Game < GAME_UE4(22))
+			return (Type)27;
+		if (Ar.Game < GAME_UE4(23))
+			return (Type)28;
+		// NEW_ENGINE_VERSION
+		return LatestVersion;
+	}
+};
+
+struct FAnimObjectVersion
+{
+	enum Type
+	{
+		BeforeCustomVersionWasAdded = 0,
+		// UE4.21, UE4.22 = 2
+		StoreMarkerNamesOnSkeleton = 2,
+		VersionPlusOne,
+		LatestVersion = VersionPlusOne - 1
+	};
+
+	static Type Get(const FArchive& Ar)
+	{
+		static const FGuid GUID = { 0xAF43A65D, 0x7FD34947, 0x98733E8E, 0xD9C1BB05 };
+		int ver = GetUE4CustomVersion(Ar, GUID);
+		if (ver >= 0)
+			return (Type)ver;
+		if (Ar.Game < GAME_UE4(21))
+			return BeforeCustomVersionWasAdded;
+		if (Ar.Game < GAME_UE4(23))
+			return StoreMarkerNamesOnSkeleton;
 		// NEW_ENGINE_VERSION
 		return LatestVersion;
 	}
@@ -2719,7 +2872,7 @@ struct FAnimPhysObjectVersion
 		AddLODToCurveMetaData = 12,
 		// UE4.19 = 16
 		ChangeRetargetSourceReferenceToSoftObjectPtr = 15,
-		// UE4.20 = 17
+		// UE4.20-UE4.22 = 17
 		VersionPlusOne,
 		LatestVersion = VersionPlusOne - 1
 	};
@@ -2740,7 +2893,7 @@ struct FAnimPhysObjectVersion
 			return AddLODToCurveMetaData;
 		if (Ar.Game < GAME_UE4(20))
 			return (Type)16;
-		if (Ar.Game < GAME_UE4(21))
+		if (Ar.Game < GAME_UE4(23))
 			return (Type)17;
 		// NEW_ENGINE_VERSION
 		return LatestVersion;
@@ -2781,6 +2934,8 @@ struct FReleaseObjectVersion
 			return AddSkeletalMeshSectionDisable;
 		if (Ar.Game < GAME_UE4(21))
 			return (Type)17;
+		if (Ar.Game < GAME_UE4(23))
+			return (Type)20;
 		// NEW_ENGINE_VERSION
 		return LatestVersion;
 	}

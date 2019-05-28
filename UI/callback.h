@@ -1,5 +1,5 @@
 // Callback (delegate) implementation.
-// Copyright (C) 2018 Konstantin Nosov.
+// Copyright (C) 2019 Konstantin Nosov.
 // Licensed under the BSD license. See LICENSE.txt file in the project root for full license information.
 
 /*
@@ -24,7 +24,7 @@ Features:
   - binding functions:
     callback = BIND_MEMBER(&Class::Method, obj)
     callback = BIND_STATIC(static_func)
-    callback = BIND_LAMNDA([capture](params...) -> ret { body })
+    callback = BIND_LAMBDA([capture](params...) -> ret { body })
 - very efficient callback assignment and call operations, using "move" semantic whenever possible
 - no dependencies on compiler or external libraries, except for malloc/free/memcpy
 

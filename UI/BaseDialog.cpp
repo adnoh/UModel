@@ -1,5 +1,5 @@
 // Simple UI library.
-// Copyright (C) 2018 Konstantin Nosov
+// Copyright (C) 2019 Konstantin Nosov
 // Licensed under the BSD license. See LICENSE.txt file in the project root for full license information.
 
 #if _WIN32
@@ -413,7 +413,7 @@ UIBitmap& UIBitmap::SetResourceIcon(int resId)
 	if (!hImage)
 		appPrintf("UIBitmap::SetResourceIcon: %d\n", GetLastError());
 #endif
-	// Note: can't get icon dimensione using GetObject() - this function would fail.
+	// Note: can't get icon dimensions using GetObject() - this function would fail.
 	if ((!Layout.Width || !Layout.Height) && hImage)
 	{
 		Layout.Width = GetSystemMetrics(SM_CXICON);
@@ -539,7 +539,7 @@ void UIHyperLink::Create(UIBaseDialog* dialog)
 #endif
 
 #if 0
-	// Unicode version (this control, as mentioned in SysLink documentaion, in Unicode-only)
+	// Unicode version (this control, as mentioned in SysLink documentation, in Unicode-only)
 	wchar_t buffer[MAX_TITLE_LEN];
 	appSprintf(ARRAY_ARG(buffer), L"<a href=\"%S\">%S</a>", *Link, *Label);
 	Wnd = Window(WC_LINK, buffer, ConvertTextAlign(Align), 0, dialog);
@@ -726,21 +726,15 @@ bool UIMenuButton::HandleCommand(int id, int cmd, LPARAM lParam)
 	if (cmd == BCN_DROPDOWN || (cmd == BN_CLICKED && !Callback))
 	{
 		// reference: MFC, CSplitButton::OnDropDown()
-		// create menu or get its handle
-		HMENU hMenu = Menu->GetHandle(true, true);
 		// get rect of button for menu positioning
 		RECT rectButton;
 		GetWindowRect(Wnd, &rectButton);
-		TPMPARAMS tpmParams;
-		tpmParams.cbSize = sizeof(TPMPARAMS);
-		tpmParams.rcExclude = rectButton;
-		int cmd = TrackPopupMenuEx(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON | TPM_RETURNCMD,
-			rectButton.left, rectButton.bottom, Wnd, &tpmParams);
-		if (cmd)
-			Menu->HandleCommand(cmd);
+		Menu->Popup(this, rectButton.left, rectButton.bottom);
 	}
 	else if (cmd == BN_CLICKED && Callback)
+	{
 		Callback(this);
+	}
 	return true;
 }
 
@@ -1155,7 +1149,7 @@ UIListbox::UIListbox()
 
 UIListbox& UIListbox::ReserveItems(int count)
 {
-	Items.ResizeTo(Items.Num() + count);
+	Items.Reserve(Items.Num() + count);
 	return *this;
 }
 
@@ -1282,6 +1276,11 @@ UIMulticolumnListbox::UIMulticolumnListbox(int numColumns)
 
 	assert(NumColumns > 0 && NumColumns <= MAX_COLUMNS);
 	Items.AddZeroed(numColumns);	// reserve place for header
+	for (int i = 0; i < numColumns; i++)
+	{
+		ColumnSizes[i] = 0;
+		ColumnAlign[i] = TA_Left;
+	}
 }
 
 UIMulticolumnListbox& UIMulticolumnListbox::AddColumn(const char* title, int width, ETextAlign align)
@@ -1347,7 +1346,7 @@ UIMulticolumnListbox& UIMulticolumnListbox::ShowSortArrow(int columnIndex, bool 
 
 UIMulticolumnListbox& UIMulticolumnListbox::ReserveItems(int count)
 {
-	Items.ResizeTo((GetItemCount() + count + 1) * NumColumns);
+	Items.Reserve((GetItemCount() + count + 1) * NumColumns);
 	return *this;
 }
 
@@ -1684,7 +1683,7 @@ void UIMulticolumnListbox::Create(UIBaseDialog* dialog)
 	UpdateEnabled();
 }
 
-bool UIMulticolumnListbox::HandleCommand(int id, int cmd, LPARAM lParam)
+bool UIMulticolumnListbox::HandleCommand(int id, int cmd, LPARAM lParam, int& result)
 {
 	guard(UIMulticolumnListbox::HandleCommand);
 
@@ -1782,12 +1781,40 @@ bool UIMulticolumnListbox::HandleCommand(int id, int cmd, LPARAM lParam)
 		NMLISTVIEW* nmlv = (NMLISTVIEW*)lParam;
 		if (nmlv->iSubItem >= 0 && nmlv->iSubItem < NumColumns && OnColumnClick)
 			OnColumnClick(this, nmlv->iSubItem);
+		return true;
 	}
 
 	if (cmd == LVN_ODFINDITEM && IsVirtualMode)
 	{
-		//!! TODO: search
-		return false;
+		// Search for item
+		result = -1;
+		NMLVFINDITEM* nmf = (NMLVFINDITEM*)lParam;
+		if ((nmf->lvfi.flags & LVFI_STRING) == 0)
+			return false;
+		int start = nmf->iStart;
+		int numItems = GetItemCount();
+		if (start >= numItems)
+			start = 0;
+		int cmpLen = strlen(nmf->lvfi.psz);
+		for (int itemIndex = start; itemIndex < numItems; itemIndex++)
+		{
+			const char* text = "";
+			if (!IsTrueVirtualMode())
+			{
+				text = const_cast<char*>(*Items[(itemIndex + 1) * NumColumns /*+ subItemIndex*/]);
+			}
+			else
+			{
+				OnGetItemText(this, text, itemIndex, 0 /*subItemIndex*/);
+			}
+
+			if (strnicmp(text, nmf->lvfi.psz, cmpLen) == 0)
+			{
+				result = itemIndex;
+				return true;
+			}
+		}
+		return true;
 	}
 
 	if (cmd == LVN_ITEMACTIVATE)
@@ -1813,6 +1840,16 @@ bool UIMulticolumnListbox::HandleCommand(int id, int cmd, LPARAM lParam)
 			}
 		}
 
+		return true;
+	}
+
+	if (cmd == NM_RCLICK && Menu)
+	{
+		// Get mouse pointer location
+		POINT pt;
+		GetCursorPos(&pt);
+		// Show menu
+		Menu->Popup(this, pt.x, pt.y);
 		return true;
 	}
 
@@ -1862,6 +1899,7 @@ UITreeView::UITreeView()
 ,	RootLabel("Root")
 ,	bUseFolderIcons(false)
 ,	bUseCheckboxes(false)
+,	bHasRootNode(true)
 ,	ItemHeight(DEFAULT_TREE_ITEM_HEIGHT)
 {
 	Layout.Height = DEFAULT_TREEVIEW_HEIGHT;
@@ -1900,6 +1938,19 @@ TreeViewItem* UITreeView::FindItem(const char* item)
 		if (stricmp(*tvitem->Label, item) == 0)
 		{
 			return tvitem;
+		}
+	}
+	return NULL;
+}
+
+TreeViewItem* UITreeView::FindItem(void* hItem)
+{
+	for (int i = 0; i < Items.Num(); i++)
+	{
+		TreeViewItem* item = Items[i];
+		if (item->hItem == hItem)
+		{
+			return item;
 		}
 	}
 	return NULL;
@@ -2008,6 +2059,11 @@ UITreeView& UITreeView::SelectItem(const char* item)
 	return *this;
 }
 
+const char* UITreeView::GetSelectedItem()
+{
+	return SelectedItem ? *SelectedItem->Label : NULL;
+}
+
 // This image list is created once and shared between all possible UITreeView controls.
 static HIMAGELIST GTreeFolderImages;
 
@@ -2076,22 +2132,36 @@ bool UITreeView::HandleCommand(int id, int cmd, LPARAM lParam)
 	if (cmd == TVN_SELCHANGED)
 	{
 		LPNMTREEVIEW data = (LPNMTREEVIEW)lParam;
-		HTREEITEM hItem = data->itemNew.hItem;
-		for (int i = 0; i < Items.Num(); i++)
+		TreeViewItem* item = FindItem(data->itemNew.hItem);
+		if (item && SelectedItem != item)
 		{
-			TreeViewItem* item = Items[i];
-			if (item->hItem == hItem)
-			{
-				if (SelectedItem != item)
-				{
-					SelectedItem = item;
-					if (Callback)
-						Callback(this, *item->Label);
-				}
-				break;
-			}
+			SelectedItem = item;
+			if (Callback)
+				Callback(this, *item->Label);
 		}
 		return true;
+	}
+	else if (cmd == NM_RCLICK && Menu)
+	{
+		// Get mouse pointer location
+		POINT pt;
+		GetCursorPos(&pt);
+
+		// Get tree item under cursor
+		TV_HITTESTINFO tvhip;
+		tvhip.pt = pt;
+		ScreenToClient(Wnd, &tvhip.pt);
+		HTREEITEM hItem = (HTREEITEM)SendMessage(Wnd, TVM_HITTEST, 0, (LPARAM)&tvhip);
+		TreeViewItem* item = FindItem(hItem);
+
+		// Save selection: Win32 will temporarily highlight right-clicked item, and restore selection later.
+		TreeViewItem* oldSelection = SelectedItem;
+		// Set selection to new item
+		SelectedItem = item;
+		// Show menu
+		Menu->Popup(this, pt.x, pt.y);
+		// Restore selection
+		SelectedItem = oldSelection;
 	}
 	return false;
 }
@@ -2105,6 +2175,11 @@ void UITreeView::CreateItem(TreeViewItem& item)
 
 	TVINSERTSTRUCT tvis;
 	memset(&tvis, 0, sizeof(tvis));
+
+	if (!item.Parent && !bHasRootNode)
+	{
+		return;
+	}
 
 	const char* text;
 	if (!item.Parent)
@@ -2138,7 +2213,7 @@ void UITreeView::CreateItem(TreeViewItem& item)
 
 	item.hItem = TreeView_InsertItem(Wnd, &tvis);
 	// expand root item
-	if (item.Parent)
+	if (item.Parent && bHasRootNode)
 	{
 		const TreeViewItem* root = GetRoot();
 		if (item.Parent == root || item.Parent->Parent == root)
@@ -2328,14 +2403,14 @@ void UIGroup::Remove(UIElement* item)
 	unguard;
 }
 
-bool UIGroup::HandleCommand(int id, int cmd, LPARAM lParam)
+bool UIGroup::HandleCommand(int id, int cmd, LPARAM lParam, int& result)
 {
 	for (UIElement* ctl = FirstChild; ctl; ctl = ctl->NextChild)
 	{
 		if (ctl->IsGroup || ctl->Id == id)
 		{
 			// pass command to control or all groups
-			if (ctl->HandleCommand(id, cmd, lParam))
+			if (ctl->HandleCommand(id, cmd, lParam, result))
 				return true;
 			if (ctl->Id == id)
 				return true;
@@ -2583,7 +2658,7 @@ void UICheckboxGroup::Create(UIBaseDialog* dialog)
 	EnableAllControls(*pValue);
 }
 
-bool UICheckboxGroup::HandleCommand(int id, int cmd, LPARAM lParam)
+bool UICheckboxGroup::HandleCommand(int id, int cmd, LPARAM lParam, int& result)
 {
 	if (id == Id)
 	{
@@ -2600,7 +2675,7 @@ bool UICheckboxGroup::HandleCommand(int id, int cmd, LPARAM lParam)
 			return true;
 		}
 	}
-	return Super::HandleCommand(id, cmd, lParam);
+	return Super::HandleCommand(id, cmd, lParam, result);
 }
 
 void UICheckboxGroup::UpdateLayout()
@@ -3072,7 +3147,20 @@ INT_PTR CALLBACK UIBaseDialog::StaticWndProc(HWND hWnd, UINT msg, WPARAM wParam,
 	// windows will not allow us to pass SEH through the message handler, so
 	// add a SEH guards here
 	TRY {
-		return dlg->WndProc(hWnd, msg, wParam, lParam);
+		SetWindowLongPtr(hWnd, DWLP_MSGRESULT, 0);
+		INT_PTR result = dlg->WndProc(hWnd, msg, wParam, lParam);
+		if (result)
+		{
+			// For DlgProc we should store result in DWLP_MSGRESULT.
+			// https://devblogs.microsoft.com/oldnewthing/?p=41923
+#if 0 // tiny "spy++" analog code
+			appPrintf("Msg: %X", msg);
+			if (msg == WM_NOTIFY) appPrintf(" Id: %d N: %d R: %d", LOWORD(wParam), ((LPNMHDR)lParam)->code, result);
+			appPrintf("\n");
+#endif
+			SetWindowLongPtr(hWnd, DWLP_MSGRESULT, result);
+		}
+		return result;
 	} CATCH_CRASH {
 #if MAX_DEBUG
 		// sometimes when working with debugger, exception inside UI could not be passed outside,
@@ -3274,11 +3362,11 @@ INT_PTR UIBaseDialog::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 		return FALSE;
 
 	if (id < FIRST_DIALOG_ID || id >= NextDialogId)
-		return TRUE;				// not any of our controls
+		return FALSE;				// not any of our controls
 
-	bool res = HandleCommand(id, cmd, lParam);   // returns 'true' if command was processed
-
-	return res ? TRUE : FALSE;
+	int res = FALSE;
+	HandleCommand(id, cmd, lParam, res); // ignore result
+	return res;
 
 	unguard;
 }
